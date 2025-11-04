@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "types": ["vite/client"],
+    "baseUrl": "./src",
+    "paths": {
+      "@mow-time/types": ["../packages/types/src"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}
+
