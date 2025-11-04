@@ -8,7 +8,7 @@ const coordinateSchema = z
     message: 'Coordinate values must be finite numbers'
   });
 
-const polygonSchema = z
+export const polygonSchema = z
   .array(coordinateSchema)
   .min(3, { message: 'Polygon must include at least three vertices' });
 

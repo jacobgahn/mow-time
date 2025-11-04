@@ -27,17 +27,17 @@ export function planMowPath(payload: MowPlanRequest): MowPlanResponse {
 }
 
 function buildStripingPath(polygon: Polygon, deckWidthInches: number): Coordinate[] {
-  const longitudes = polygon.map(([lon]) => lon);
-  const latitudes = polygon.map(([, lat]) => lat);
+  const latitudes = polygon.map(([lat]) => lat);
+  const longitudes = polygon.map(([, lng]) => lng);
 
   if (longitudes.length === 0 || latitudes.length === 0) {
     return [];
   }
 
-  const lonMin = Math.min(...longitudes);
-  const lonMax = Math.max(...longitudes);
   const latMin = Math.min(...latitudes);
   const latMax = Math.max(...latitudes);
+  const lonMin = Math.min(...longitudes);
+  const lonMax = Math.max(...longitudes);
 
   const lonSpan = lonMax - lonMin;
   const latSpan = latMax - latMin;
@@ -49,25 +49,25 @@ function buildStripingPath(polygon: Polygon, deckWidthInches: number): Coordinat
 
   if (orientation === 'horizontal') {
     const spacing = toLatitudeDegrees(deckWidthInches);
-    return createHorizontalStripes(lonMin, lonMax, latMin, latMax, latSpan, spacing);
+    return createHorizontalStripes(latMin, latMax, lonMin, lonMax, latSpan, spacing);
   }
 
   const spacing = toLongitudeDegrees(deckWidthInches, centerLat);
-  return createVerticalStripes(lonMin, lonMax, latMin, latMax, lonSpan, spacing);
+  return createVerticalStripes(latMin, latMax, lonMin, lonMax, lonSpan, spacing);
 }
 
 function createHorizontalStripes(
-  lonMin: number,
-  lonMax: number,
   latMin: number,
   latMax: number,
+  lonMin: number,
+  lonMax: number,
   latSpan: number,
   preferredSpacing: number
 ): Coordinate[] {
   if (!Number.isFinite(latMin) || !Number.isFinite(latMax) || latMin === latMax) {
     return [
-      [lonMin, latMin],
-      [lonMax, latMax]
+      [latMin, lonMin],
+      [latMax, lonMax]
     ];
   }
 
@@ -78,8 +78,8 @@ function createHorizontalStripes(
   for (let index = 0; index < stripeCount; index += 1) {
     const currentLat = latMin + actualSpacing * index;
     const leftToRight = index % 2 === 0;
-    const start: Coordinate = leftToRight ? [lonMin, currentLat] : [lonMax, currentLat];
-    const end: Coordinate = leftToRight ? [lonMax, currentLat] : [lonMin, currentLat];
+    const start: Coordinate = leftToRight ? [currentLat, lonMin] : [currentLat, lonMax];
+    const end: Coordinate = leftToRight ? [currentLat, lonMax] : [currentLat, lonMin];
 
     stripes.push(start, end);
   }
@@ -88,17 +88,17 @@ function createHorizontalStripes(
 }
 
 function createVerticalStripes(
-  lonMin: number,
-  lonMax: number,
   latMin: number,
   latMax: number,
+  lonMin: number,
+  lonMax: number,
   lonSpan: number,
   preferredSpacing: number
 ): Coordinate[] {
   if (!Number.isFinite(lonMin) || !Number.isFinite(lonMax) || lonMin === lonMax) {
     return [
-      [lonMin, latMin],
-      [lonMax, latMax]
+      [latMin, lonMin],
+      [latMax, lonMax]
     ];
   }
 
@@ -109,8 +109,8 @@ function createVerticalStripes(
   for (let index = 0; index < stripeCount; index += 1) {
     const currentLon = lonMin + actualSpacing * index;
     const topToBottom = index % 2 === 0;
-    const start: Coordinate = topToBottom ? [currentLon, latMin] : [currentLon, latMax];
-    const end: Coordinate = topToBottom ? [currentLon, latMax] : [currentLon, latMin];
+    const start: Coordinate = topToBottom ? [latMin, currentLon] : [latMax, currentLon];
+    const end: Coordinate = topToBottom ? [latMax, currentLon] : [latMin, currentLon];
 
     stripes.push(start, end);
   }
@@ -149,9 +149,9 @@ function appendConnector(path: Coordinate[], coordinate: Coordinate): void {
 }
 
 function coordinatesEqual(a: Coordinate, b: Coordinate): boolean {
-  const [ax, ay] = a;
-  const [bx, by] = b;
-  return Math.abs(ax - bx) < 1e-10 && Math.abs(ay - by) < 1e-10;
+  const [alat, alng] = a;
+  const [blat, blng] = b;
+  return Math.abs(alat - blat) < 1e-10 && Math.abs(alng - blng) < 1e-10;
 }
 
 function degreesToRadians(value: number): number {

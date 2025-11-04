@@ -1,9 +1,17 @@
 import type { Request, Response } from 'express';
-import { mowPlanSchema } from '../schemas/mowPlanSchema.js';
+import { mowPlanSchema, polygonSchema } from '../schemas/mowPlanSchema.js';
 import { planMowPath } from '../services/mowPlanner.js';
 
 export function handleMowTimeRequest(req: Request, res: Response): Response {
-  const parsed = mowPlanSchema.safeParse(req.body);
+  // Filter out invalid polygons before validation
+  const body = { ...req.body };
+  if (Array.isArray(body.polygons)) {
+    body.polygons = body.polygons.filter((polygon: unknown) => {
+      return polygonSchema.safeParse(polygon).success;
+    });
+  }
+
+  const parsed = mowPlanSchema.safeParse(body);
 
   if (!parsed.success) {
     const { fieldErrors, formErrors } = parsed.error.flatten();

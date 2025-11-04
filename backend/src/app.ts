@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import { googleRouter } from './routes/googleRouter.js';
 import { mowTimeRouter } from './routes/mowTimeRouter.js';
 
 const app = express();
@@ -12,6 +13,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/mow-time', mowTimeRouter);
+app.use('/api/google', googleRouter);
 
 export default app;
 

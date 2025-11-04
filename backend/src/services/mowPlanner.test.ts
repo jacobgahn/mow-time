@@ -36,19 +36,54 @@ describe('planMowPath', () => {
 });
 
 function hasAlternatingSegments(path: readonly [number, number][]): boolean {
-  if (path.length < 4) {
-    return false;
-  }
+  const simplified: [number, number][] = [];
 
-  const firstSegmentDirection = Math.sign(path[1][0] - path[0][0]);
-
-  for (let index = 2; index < path.length; index += 2) {
-    const direction = Math.sign(path[index + 1]?.[0] - path[index]?.[0] ?? 0);
-    if (direction === firstSegmentDirection) {
-      return false;
+  for (const coordinate of path) {
+    const last = simplified[simplified.length - 1];
+    if (!last || !coordinatesEqual(last, coordinate)) {
+      simplified.push([...coordinate] as [number, number]);
     }
   }
 
+  if (simplified.length < 4) {
+    return false;
+  }
+
+  const firstSegment = [simplified[0], simplified[1]] as const;
+  if (!firstSegment[1]) {
+    return false;
+  }
+
+  const firstDeltaLon = firstSegment[1][0] - firstSegment[0][0];
+  const firstDeltaLat = firstSegment[1][1] - firstSegment[0][1];
+  const horizontal = Math.abs(firstDeltaLon) >= Math.abs(firstDeltaLat);
+  const baseDirection = horizontal
+    ? Math.sign(firstDeltaLon)
+    : Math.sign(firstDeltaLat);
+
+  if (baseDirection === 0) {
+    return false;
+  }
+
+  let expectedDirection = -baseDirection;
+
+  for (let index = 2; index + 1 < simplified.length; index += 2) {
+    const start = simplified[index];
+    const end = simplified[index + 1];
+    const delta = horizontal ? end[0] - start[0] : end[1] - start[1];
+    const direction = Math.sign(delta);
+
+    if (direction !== expectedDirection) {
+      return false;
+    }
+
+    expectedDirection = -expectedDirection;
+  }
+
   return true;
+}
+
+function coordinatesEqual(a: readonly [number, number], b: readonly [number, number]): boolean {
+  return Math.abs(a[0] - b[0]) < 1e-10 && Math.abs(a[1] - b[1]) < 1e-10;
 }
 
