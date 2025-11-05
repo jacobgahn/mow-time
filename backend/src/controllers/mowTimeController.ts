@@ -1,13 +1,13 @@
 import type { Request, Response } from 'express';
-import { mowPlanSchema, polygonSchema } from '../schemas/mowPlanSchema.js';
+import { mowPlanSchema, polygonRingsSchema } from '../schemas/mowPlanSchema.js';
 import { planMowPath } from '../services/mowPlanner.js';
 
 export function handleMowTimeRequest(req: Request, res: Response): Response {
   // Filter out invalid polygons before validation
   const body = { ...req.body };
   if (Array.isArray(body.polygons)) {
-    body.polygons = body.polygons.filter((polygon: unknown) => {
-      return polygonSchema.safeParse(polygon).success;
+    body.polygons = body.polygons.filter((rings: unknown) => {
+      return polygonRingsSchema.safeParse(rings).success;
     });
   }
 

@@ -1,14 +1,15 @@
 import { Loader } from '@googlemaps/js-api-loader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Coordinate, Polygon } from '@mow-time/types';
+import type { Coordinate, PolygonRings } from '@mow-time/types';
 
 type MapMode = 'draw' | 'view';
+type DrawingMode = 'area' | 'obstacle';
 
 interface MapViewProps {
-  polygons: Polygon[];
+  polygons: PolygonRings[];
   path: Coordinate[];
   mode: MapMode;
-  onPolygonsChange: (polygons: Polygon[]) => void;
+  onPolygonsChange: (polygons: PolygonRings[]) => void;
 }
 
 interface AutocompletePrediction {
@@ -35,13 +36,19 @@ interface PlaceDetailsResult {
 const DEFAULT_CENTER: google.maps.LatLngLiteral = { lat: 39.8283, lng: -98.5795 };
 const DEFAULT_ZOOM = 4;
 
+// Internal interface for managing Google Maps polygon overlays
+interface PolygonOverlayGroup {
+  outer: google.maps.Polygon;
+  obstacles: google.maps.Polygon[];
+}
+
 export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps): JSX.Element {
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const googleRef = useRef<typeof google | null>(null);
   const drawingManagerRef = useRef<google.maps.drawing.DrawingManager | null>(null);
-  const polygonOverlaysRef = useRef<google.maps.Polygon[]>([]);
+  const polygonGroupsRef = useRef<PolygonOverlayGroup[]>([]);
   const polygonListenersRef = useRef<Map<google.maps.Polygon, google.maps.MapsEventListener[]>>(
     new Map(),
   );
@@ -54,12 +61,24 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<AutocompletePrediction[]>([]);
   const [isResultsOpen, setIsResultsOpen] = useState(false);
+  const [drawingMode, setDrawingMode] = useState<DrawingMode>('area');
+  const [selectedOuterIndex, setSelectedOuterIndex] = useState<number | null>(null);
+  const drawingModeRef = useRef<DrawingMode>('area');
+  const selectedOuterIndexRef = useRef<number | null>(null);
   const sessionTokenRef = useRef<string>(generateSessionToken());
   const onPolygonsChangeRef = useRef(onPolygonsChange);
 
   useEffect(() => {
     onPolygonsChangeRef.current = onPolygonsChange;
   }, [onPolygonsChange]);
+
+  useEffect(() => {
+    drawingModeRef.current = drawingMode;
+  }, [drawingMode]);
+
+  useEffect(() => {
+    selectedOuterIndexRef.current = selectedOuterIndex;
+  }, [selectedOuterIndex]);
 
   const loader = useMemo(() => {
     if (!apiKey) {
@@ -78,25 +97,54 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
       return;
     }
 
-    const coordinates: Polygon[] = polygonOverlaysRef.current.map((polygon) =>
-      polygon
+    const rings: PolygonRings[] = polygonGroupsRef.current.map((group): PolygonRings => {
+      const outer: Coordinate[] = group.outer
         .getPath()
         .getArray()
-        .map((latLng) => [latLng.lat(), latLng.lng()]),
-    );
+        .map((latLng): Coordinate => [latLng.lat(), latLng.lng()]);
 
-    onPolygonsChangeRef.current(coordinates);
+      const holes: Coordinate[][] = group.obstacles.map((obstacle): Coordinate[] =>
+        obstacle
+          .getPath()
+          .getArray()
+          .map((latLng): Coordinate => [latLng.lat(), latLng.lng()]),
+      );
+
+      return [outer, ...holes];
+    });
+
+    onPolygonsChangeRef.current(rings);
   }, []);
 
   const clearPolygonOverlays = useCallback(() => {
-    polygonOverlaysRef.current.forEach((polygon) => {
-      polygon.setMap(null);
-      const listeners = polygonListenersRef.current.get(polygon) ?? [];
-      listeners.forEach((listener) => listener.remove());
+    polygonGroupsRef.current.forEach((group) => {
+      group.outer.setMap(null);
+      const outerListeners = polygonListenersRef.current.get(group.outer) ?? [];
+      outerListeners.forEach((listener) => listener.remove());
+
+      group.obstacles.forEach((obstacle) => {
+        obstacle.setMap(null);
+        const obstacleListeners = polygonListenersRef.current.get(obstacle) ?? [];
+        obstacleListeners.forEach((listener) => listener.remove());
+      });
     });
 
-    polygonOverlaysRef.current = [];
+    polygonGroupsRef.current = [];
     polygonListenersRef.current.clear();
+  }, []);
+
+  const updatePolygonWithHoles = useCallback((group: PolygonOverlayGroup) => {
+    if (!googleRef.current) {
+      return;
+    }
+
+    const google = googleRef.current;
+    const paths = [
+      group.outer.getPath(),
+      ...group.obstacles.map((obs) => obs.getPath()),
+    ];
+
+    group.outer.setPaths(paths);
   }, []);
 
   useEffect(() => {
@@ -167,11 +215,67 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
 
             const polygon = event.overlay as google.maps.Polygon;
             polygon.setEditable(true);
-            polygonOverlaysRef.current.push(polygon);
-            polygonListenersRef.current.set(
-              polygon,
-              collectListeners(google, polygon, syncPolygons),
-            );
+
+            const currentDrawingMode = drawingModeRef.current;
+            const currentSelectedIndex = selectedOuterIndexRef.current;
+
+            if (currentDrawingMode === 'area') {
+              // Create new outer polygon group
+              const group: PolygonOverlayGroup = {
+                outer: polygon,
+                obstacles: [],
+              };
+              const newIndex = polygonGroupsRef.current.length;
+              polygonGroupsRef.current.push(group);
+              polygon.setOptions({
+                fillColor: '#2563eb',
+                fillOpacity: 0.18,
+                strokeColor: '#2563eb',
+                strokeWeight: 2,
+              });
+              const listeners = collectListeners(google, polygon, syncPolygons);
+              listeners.push(
+                google.maps.event.addListener(polygon, 'click', () => {
+                  if (drawingModeRef.current === 'obstacle') {
+                    setSelectedOuterIndex(newIndex);
+                    selectedOuterIndexRef.current = newIndex;
+                    // Highlight selected polygon
+                    polygonGroupsRef.current.forEach((g, idx) => {
+                      g.outer.setOptions({
+                        strokeWeight: idx === newIndex ? 4 : 2,
+                        strokeColor: idx === newIndex ? '#1e40af' : '#2563eb',
+                      });
+                    });
+                  }
+                }),
+              );
+              polygonListenersRef.current.set(polygon, listeners);
+              setSelectedOuterIndex(newIndex);
+              selectedOuterIndexRef.current = newIndex;
+            } else if (currentDrawingMode === 'obstacle' && currentSelectedIndex !== null) {
+              // Add obstacle to selected outer polygon
+              const group = polygonGroupsRef.current[currentSelectedIndex];
+              if (group) {
+                group.obstacles.push(polygon);
+                polygon.setOptions({
+                  fillColor: '#dc2626',
+                  fillOpacity: 0.25,
+                  strokeColor: '#dc2626',
+                  strokeWeight: 2,
+                  clickable: true,
+                  editable: true,
+                });
+                polygonListenersRef.current.set(
+                  polygon,
+                  collectListeners(google, polygon, () => {
+                    updatePolygonWithHoles(group);
+                    syncPolygons();
+                  }),
+                );
+                updatePolygonWithHoles(group);
+              }
+            }
+
             syncPolygons();
           },
         );
@@ -203,19 +307,111 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
 
     if (mode === 'draw') {
       drawingManagerRef.current.setDrawingMode(google.maps.drawing.OverlayType.POLYGON);
-      polygonOverlaysRef.current.forEach((polygon) => polygon.setEditable(true));
+      polygonGroupsRef.current.forEach((group) => {
+        group.outer.setEditable(true);
+        group.obstacles.forEach((obs) => obs.setEditable(true));
+      });
       hasFitToPathRef.current = false;
     } else {
       drawingManagerRef.current.setDrawingMode(null);
-      polygonOverlaysRef.current.forEach((polygon) => polygon.setEditable(false));
+      polygonGroupsRef.current.forEach((group) => {
+        group.outer.setEditable(false);
+        group.obstacles.forEach((obs) => obs.setEditable(false));
+      });
     }
   }, [mode]);
 
   useEffect(() => {
-    if (polygons.length === 0) {
-      clearPolygonOverlays();
+    if (!googleRef.current || !mapRef.current || polygons.length === 0) {
+      if (polygons.length === 0) {
+        clearPolygonOverlays();
+      }
+      return;
     }
-  }, [clearPolygonOverlays, polygons]);
+
+    const google = googleRef.current;
+    const map = mapRef.current;
+
+    // Clear existing overlays
+    clearPolygonOverlays();
+
+    // Rebuild from props
+    polygons.forEach((rings) => {
+      if (rings.length === 0) return;
+
+      const outerPath = rings[0].map(([lat, lng]) => ({ lat, lng }));
+      const outerPolygon = new google.maps.Polygon({
+        map,
+        paths: outerPath,
+        fillColor: '#2563eb',
+        fillOpacity: 0.18,
+        strokeColor: '#2563eb',
+        strokeWeight: 2,
+        clickable: true,
+        editable: mode === 'draw',
+      });
+
+      const holes = rings.slice(1).map((hole) => hole.map(([lat, lng]) => ({ lat, lng })));
+      const obstaclePolygons: google.maps.Polygon[] = holes.map((holePath) => {
+        const obs = new google.maps.Polygon({
+          map,
+          paths: holePath,
+          fillColor: '#dc2626',
+          fillOpacity: 0.25,
+          strokeColor: '#dc2626',
+          strokeWeight: 2,
+          clickable: true,
+          editable: mode === 'draw',
+        });
+        return obs;
+      });
+
+      // Create combined polygon with holes
+      if (holes.length > 0) {
+        outerPolygon.setPaths([outerPath, ...holes]);
+      }
+
+      const group: PolygonOverlayGroup = {
+        outer: outerPolygon,
+        obstacles: obstaclePolygons,
+      };
+      const groupIndex = polygonGroupsRef.current.length;
+      polygonGroupsRef.current.push(group);
+
+      const outerListeners = collectListeners(google, outerPolygon, syncPolygons);
+      outerListeners.push(
+        google.maps.event.addListener(outerPolygon, 'click', () => {
+          if (drawingModeRef.current === 'obstacle') {
+            setSelectedOuterIndex(groupIndex);
+            selectedOuterIndexRef.current = groupIndex;
+            // Highlight selected polygon
+            polygonGroupsRef.current.forEach((g, idx) => {
+              g.outer.setOptions({
+                strokeWeight: idx === groupIndex ? 4 : 2,
+                strokeColor: idx === groupIndex ? '#1e40af' : '#2563eb',
+              });
+            });
+          }
+        }),
+      );
+      polygonListenersRef.current.set(outerPolygon, outerListeners);
+
+      obstaclePolygons.forEach((obs) => {
+        polygonListenersRef.current.set(
+          obs,
+          collectListeners(google, obs, () => {
+            updatePolygonWithHoles(group);
+            syncPolygons();
+          }),
+        );
+      });
+    });
+
+    if (polygonGroupsRef.current.length > 0) {
+      setSelectedOuterIndex(0);
+      selectedOuterIndexRef.current = 0;
+    }
+  }, [clearPolygonOverlays, mode, polygons, syncPolygons, updatePolygonWithHoles]);
 
   useEffect(() => {
     if (!googleRef.current || !mapRef.current || !pathOverlayRef.current) {
@@ -352,6 +548,30 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
     );
   }
 
+  const handleDrawingModeChange = (newMode: DrawingMode) => {
+    setDrawingMode(newMode);
+    drawingModeRef.current = newMode;
+    if (newMode === 'obstacle' && polygonGroupsRef.current.length > 0 && selectedOuterIndex === null) {
+      setSelectedOuterIndex(0);
+      selectedOuterIndexRef.current = 0;
+    } else if (newMode === 'area') {
+      // Reset highlighting when switching to area mode
+      polygonGroupsRef.current.forEach((g) => {
+        g.outer.setOptions({
+          strokeWeight: 2,
+          strokeColor: '#2563eb',
+        });
+      });
+    }
+  };
+
+  const handleOuterPolygonClick = (index: number) => {
+    setSelectedOuterIndex(index);
+    selectedOuterIndexRef.current = index;
+    setDrawingMode('obstacle');
+    drawingModeRef.current = 'obstacle';
+  };
+
   return (
     <div className="map-panel panel">
       <div className="map-toolbar">
@@ -370,10 +590,35 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
         <button type="button" onClick={handleSearch} disabled={isSearching || !isMapReady}>
           {isSearching ? 'Finding…' : 'Find'}
         </button>
+        {mode === 'draw' && (
+          <>
+            <button
+              type="button"
+              className={drawingMode === 'area' ? 'primary' : 'secondary'}
+              onClick={() => handleDrawingModeChange('area')}
+              disabled={!isMapReady}
+            >
+              Draw Area
+            </button>
+            <button
+              type="button"
+              className={drawingMode === 'obstacle' ? 'primary' : 'secondary'}
+              onClick={() => handleDrawingModeChange('obstacle')}
+              disabled={!isMapReady || polygonGroupsRef.current.length === 0}
+            >
+              Add Obstacle
+            </button>
+          </>
+        )}
         <button type="button" className="secondary" onClick={handleClear}>
           Clear Map
         </button>
       </div>
+      {mode === 'draw' && drawingMode === 'obstacle' && polygonGroupsRef.current.length > 0 && (
+        <div style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', color: '#64748b' }}>
+          Click on an area (blue) to select it, then draw obstacles (red) inside it.
+        </div>
+      )}
       {searchError ? <div className="error-banner">{searchError}</div> : null}
       <div className="map-container" ref={mapContainerRef} />
       {isResultsOpen && searchResults.length > 0 ? (

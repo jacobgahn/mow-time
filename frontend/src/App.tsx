@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { Coordinate, Polygon } from '@mow-time/types';
+import type { Coordinate, PolygonRings } from '@mow-time/types';
 import { MapView } from './components/MapView';
 import { MowerSetupForm } from './components/MowerSetupForm';
 import './App.css';
@@ -10,7 +10,7 @@ const API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL as strin
 
 function App(): JSX.Element {
   const [deckWidth, setDeckWidth] = useState<number | undefined>();
-  const [polygons, setPolygons] = useState<Polygon[]>([]);
+  const [polygons, setPolygons] = useState<PolygonRings[]>([]);
   const [mode, setMode] = useState<Mode>('draw');
   const [path, setPath] = useState<Coordinate[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -23,7 +23,7 @@ function App(): JSX.Element {
   }, [deckWidth, polygonsCount, isSubmitting]);
 
   const handlePolygonsChange = useCallback(
-    (nextPolygons: Polygon[]) => {
+    (nextPolygons: PolygonRings[]) => {
       setPolygons(nextPolygons);
       setError(null);
       if (mode === 'view') {

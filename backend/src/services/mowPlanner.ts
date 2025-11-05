@@ -1,4 +1,4 @@
-import type { Coordinate, MowPlanRequest, MowPlanResponse, Polygon } from '@mow-time/types';
+import type { Coordinate, MowPlanRequest, MowPlanResponse, PolygonRings } from '@mow-time/types';
 
 const METERS_PER_INCH = 0.0254;
 const METERS_PER_DEGREE_LAT = 111_320;
@@ -8,27 +8,32 @@ const MAX_STRIPES = 200;
 export function planMowPath(payload: MowPlanRequest): MowPlanResponse {
   const path: Coordinate[] = [];
 
-  for (const polygon of payload.polygons) {
-    if (polygon.length === 0) {
+  for (const rings of payload.polygons) {
+    if (!Array.isArray(rings) || rings.length === 0) {
       continue;
     }
 
-    const stripes = buildStripingPath(polygon, payload.deckWidthInches);
+    const outer = rings[0];
+    if (outer.length === 0) {
+      continue;
+    }
+
+    const stripes = buildStripingPath(outer, payload.deckWidthInches);
 
     if (stripes.length === 0) {
       continue;
     }
 
-    appendConnector(path, polygon[0]);
+    appendConnector(path, outer[0]);
     path.push(...stripes);
   }
 
   return { path };
 }
 
-function buildStripingPath(polygon: Polygon, deckWidthInches: number): Coordinate[] {
-  const latitudes = polygon.map(([lat]) => lat);
-  const longitudes = polygon.map(([, lng]) => lng);
+function buildStripingPath(outer: Coordinate[], deckWidthInches: number): Coordinate[] {
+  const latitudes = outer.map(([lat]) => lat);
+  const longitudes = outer.map(([, lng]) => lng);
 
   if (longitudes.length === 0 || latitudes.length === 0) {
     return [];
