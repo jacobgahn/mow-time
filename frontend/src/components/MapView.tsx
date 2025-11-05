@@ -133,7 +133,7 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
     polygonListenersRef.current.clear();
   }, []);
 
-  const updatePolygonWithHoles = useCallback((group: PolygonOverlayGroup) => {
+  const updatePolygonWithHoles = useCallback((group: PolygonOverlayGroup, shouldBeEditable?: boolean) => {
     if (!googleRef.current) {
       return;
     }
@@ -144,8 +144,74 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
       ...group.obstacles.map((obs) => obs.getPath()),
     ];
 
+    const wasEditable = shouldBeEditable ?? group.outer.getEditable();
     group.outer.setPaths(paths);
+    // Restore editable state after setPaths (which may reset it)
+    if (wasEditable) {
+      group.outer.setEditable(true);
+    }
   }, []);
+
+  const deletePolygonRef = useRef<(index: number) => void>();
+  const deleteObstacleRef = useRef<(groupIndex: number, obstaclePolygon: google.maps.Polygon) => void>();
+
+  const deletePolygon = useCallback((index: number) => {
+    const group = polygonGroupsRef.current[index];
+    if (!group) return;
+
+    // Remove all listeners
+    const outerListeners = polygonListenersRef.current.get(group.outer) ?? [];
+    outerListeners.forEach((listener) => listener.remove());
+    polygonListenersRef.current.delete(group.outer);
+
+    group.obstacles.forEach((obs) => {
+      const obsListeners = polygonListenersRef.current.get(obs) ?? [];
+      obsListeners.forEach((listener) => listener.remove());
+      polygonListenersRef.current.delete(obs);
+      obs.setMap(null);
+    });
+
+    group.outer.setMap(null);
+    polygonGroupsRef.current.splice(index, 1);
+
+    // Update selected index if needed
+    if (selectedOuterIndexRef.current !== null) {
+      if (selectedOuterIndexRef.current >= polygonGroupsRef.current.length) {
+        const newIndex = polygonGroupsRef.current.length > 0 ? polygonGroupsRef.current.length - 1 : null;
+        setSelectedOuterIndex(newIndex);
+        selectedOuterIndexRef.current = newIndex;
+      } else if (selectedOuterIndexRef.current > index) {
+        setSelectedOuterIndex(selectedOuterIndexRef.current - 1);
+        selectedOuterIndexRef.current -= 1;
+      }
+    }
+
+    syncPolygons();
+  }, [syncPolygons]);
+
+  const deleteObstacle = useCallback((groupIndex: number, obstaclePolygon: google.maps.Polygon) => {
+    const group = polygonGroupsRef.current[groupIndex];
+    if (!group) return;
+
+    const obstacleIndex = group.obstacles.findIndex((obs) => obs === obstaclePolygon);
+    if (obstacleIndex === -1) return;
+
+    const obstacle = group.obstacles[obstacleIndex];
+    const obsListeners = polygonListenersRef.current.get(obstacle) ?? [];
+    obsListeners.forEach((listener) => listener.remove());
+    polygonListenersRef.current.delete(obstacle);
+    obstacle.setMap(null);
+
+    group.obstacles.splice(obstacleIndex, 1);
+    const shouldBeEditable = group.outer.getEditable();
+    updatePolygonWithHoles(group, shouldBeEditable);
+    syncPolygons();
+  }, [syncPolygons, updatePolygonWithHoles]);
+
+  useEffect(() => {
+    deletePolygonRef.current = deletePolygon;
+    deleteObstacleRef.current = deleteObstacle;
+  }, [deletePolygon, deleteObstacle]);
 
   useEffect(() => {
     if (!loader || !mapContainerRef.current) {
@@ -176,6 +242,7 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
           fullscreenControl: true,
           cameraControl: false,
           zoomControl: true,
+          draggable: false
         });
 
         mapRef.current = map;
@@ -248,6 +315,12 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
                     });
                   }
                 }),
+                google.maps.event.addListener(polygon, 'rightclick', (event: google.maps.PolyMouseEvent) => {
+                  // Only delete if not clicking on a vertex (vertex deletion is handled in collectListeners)
+                  if (event.vertex == null && mode === 'draw' && deletePolygonRef.current) {
+                    deletePolygonRef.current(newIndex);
+                  }
+                }),
               );
               polygonListenersRef.current.set(polygon, listeners);
               setSelectedOuterIndex(newIndex);
@@ -265,14 +338,26 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
                   clickable: true,
                   editable: true,
                 });
-                polygonListenersRef.current.set(
-                  polygon,
-                  collectListeners(google, polygon, () => {
-                    updatePolygonWithHoles(group);
-                    syncPolygons();
+                const obstacleListeners = collectListeners(google, polygon, () => {
+                  const shouldBeEditable = mode === 'draw';
+                  updatePolygonWithHoles(group, shouldBeEditable);
+                  syncPolygons();
+                });
+                obstacleListeners.push(
+                  google.maps.event.addListener(polygon, 'rightclick', (event: google.maps.PolyMouseEvent) => {
+                    // Only delete if not clicking on a vertex (vertex deletion is handled in collectListeners)
+                    if (event.vertex == null && mode === 'draw' && deleteObstacleRef.current) {
+                      deleteObstacleRef.current(currentSelectedIndex, polygon);
+                    }
                   }),
                 );
+                polygonListenersRef.current.set(polygon, obstacleListeners);
                 updatePolygonWithHoles(group);
+                // Ensure editable state is preserved after updatePolygonWithHoles
+                if (mode === 'draw') {
+                  polygon.setEditable(true);
+                  group.outer.setEditable(true);
+                }
               }
             }
 
@@ -369,6 +454,10 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
       // Create combined polygon with holes
       if (holes.length > 0) {
         outerPolygon.setPaths([outerPath, ...holes]);
+        // Ensure editable state is preserved after setPaths
+        if (mode === 'draw') {
+          outerPolygon.setEditable(true);
+        }
       }
 
       const group: PolygonOverlayGroup = {
@@ -393,17 +482,30 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
             });
           }
         }),
+        google.maps.event.addListener(outerPolygon, 'rightclick', (event: google.maps.PolyMouseEvent) => {
+          // Only delete if not clicking on a vertex (vertex deletion is handled in collectListeners)
+          if (event.vertex == null && mode === 'draw' && deletePolygonRef.current) {
+            deletePolygonRef.current(groupIndex);
+          }
+        }),
       );
       polygonListenersRef.current.set(outerPolygon, outerListeners);
 
       obstaclePolygons.forEach((obs) => {
-        polygonListenersRef.current.set(
-          obs,
-          collectListeners(google, obs, () => {
-            updatePolygonWithHoles(group);
-            syncPolygons();
+        const obstacleListeners = collectListeners(google, obs, () => {
+          const shouldBeEditable = mode === 'draw';
+          updatePolygonWithHoles(group, shouldBeEditable);
+          syncPolygons();
+        });
+        obstacleListeners.push(
+          google.maps.event.addListener(obs, 'rightclick', (event: google.maps.PolyMouseEvent) => {
+            // Only delete if not clicking on a vertex (vertex deletion is handled in collectListeners)
+            if (event.vertex == null && mode === 'draw' && deleteObstacleRef.current) {
+              deleteObstacleRef.current(groupIndex, obs);
+            }
           }),
         );
+        polygonListenersRef.current.set(obs, obstacleListeners);
       });
     });
 
@@ -614,9 +716,13 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
           Clear Map
         </button>
       </div>
-      {mode === 'draw' && drawingMode === 'obstacle' && polygonGroupsRef.current.length > 0 && (
+      {mode === 'draw' && (
         <div style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', color: '#64748b' }}>
-          Click on an area (blue) to select it, then draw obstacles (red) inside it.
+          {drawingMode === 'obstacle' && polygonGroupsRef.current.length > 0 ? (
+            <>Click on an area (blue) to select it, then draw obstacles (red) inside it.</>
+          ) : (
+            <>Drag vertices to edit shapes. Right-click to delete. Use zoom controls to navigate.</>
+          )}
         </div>
       )}
       {searchError ? <div className="error-banner">{searchError}</div> : null}
