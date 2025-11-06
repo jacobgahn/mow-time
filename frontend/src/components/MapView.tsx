@@ -242,7 +242,7 @@ export function MapView({ polygons, path, mode, onPolygonsChange }: MapViewProps
           fullscreenControl: true,
           cameraControl: false,
           zoomControl: true,
-          draggable: false
+          draggable: true
         });
 
         mapRef.current = map;
