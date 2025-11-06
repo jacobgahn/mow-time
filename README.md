@@ -2,6 +2,8 @@
 
 Mow Time is a toy project for experimenting with lawn-coverage planning. The goal is to let a user sketch their yard, plug in mower preferences, and preview an efficient mowing pattern.
 
+<img width="1188" height="855" alt="Screenshot 2025-11-06 100651" src="https://github.com/user-attachments/assets/07702392-6eea-4375-85d0-21ce9e5f9f8c" />
+
 ### Features To-Do
 
 - Radically improve the mowing algorithm
